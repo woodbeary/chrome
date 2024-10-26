@@ -1,0 +1,40 @@
+.gemini-generate-button {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+}
+
+.gemini-generate-button button {
+  background-color: transparent;
+  color: rgb(29, 155, 240);
+  border: none;
+  padding: 6px 12px;
+  border-radius: 16px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.gemini-generate-button button:hover {
+  background-color: rgba(29, 155, 240, 0.1);
+}
+
+.gemini-generate-button button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .gemini-generate-button button {
+    color: rgb(239, 243, 244);
+  }
+  
+  .gemini-generate-button button:hover {
+    background-color: rgba(239, 243, 244, 0.1);
+  }
+}
