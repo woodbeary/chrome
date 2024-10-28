@@ -80,161 +80,125 @@ async function extractPostContext(postElement) {
 
 // Create and inject the generate button
 function createGenerateButton(postElement) {
-  // Check if button already exists
-  if (postElement.querySelector('.gemini-generate-button')) return;
+  // Check if buttons already exist
+  if (postElement.querySelector('.gemini-generate-buttons')) return;
 
-  // Find the actions bar (where reply, retweet, like buttons are)
+  // Find the actions bar
   const actionsBar = postElement.querySelector('[role="group"]');
   if (!actionsBar) return;
 
   const buttonContainer = document.createElement('div');
-  buttonContainer.className = 'gemini-generate-button';
+  buttonContainer.className = 'gemini-generate-buttons';
+  buttonContainer.style.display = 'flex';
+  buttonContainer.style.gap = '8px';
   
+  // Create Generate button
   const generateButton = document.createElement('button');
   generateButton.textContent = 'Generate';
-  generateButton.onclick = async () => {
-    // Show loading state
-    generateButton.textContent = 'Generating...';
-    generateButton.disabled = true;
+  generateButton.onclick = () => handleGeneration(postElement, false);
+  
+  // Create QRT button
+  const qrtButton = document.createElement('button');
+  qrtButton.textContent = 'QRT';
+  qrtButton.onclick = () => handleGeneration(postElement, true);
+  
+  buttonContainer.appendChild(generateButton);
+  buttonContainer.appendChild(qrtButton);
+  actionsBar.appendChild(buttonContainer);
+}
 
-    try {
-      // FIXED: Await the context extraction
-      const context = await extractPostContext(postElement);
+// Separate the generation logic into its own function
+async function handleGeneration(postElement, isQRT) {
+  const button = isQRT ? 
+    postElement.querySelector('.gemini-generate-buttons button:nth-child(2)') :
+    postElement.querySelector('.gemini-generate-buttons button:nth-child(1)');
+
+  // Show loading state
+  const originalText = button.textContent;
+  button.textContent = 'Generating...';
+  button.disabled = true;
+
+  try {
+    const context = await extractPostContext(postElement);
+    const { geminiApiKey } = await chrome.storage.sync.get(['geminiApiKey']);
+    
+    if (!geminiApiKey) {
+      alert('Please set your Gemini API key in the extension popup');
+      return;
+    }
+
+    // Click the appropriate button based on isQRT
+    if (isQRT) {
+      const qrtButton = postElement.querySelector('[data-testid="retweet"]');
+      qrtButton?.click();
       
-      console.log('Extracted context:', context); // Debug log
+      // Wait for the dropdown menu and click Quote
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const quoteOption = document.querySelector('[role="menuitem"] [class*="r-bcqeeo"] span:not([dir])');
+      let quoteButton = null;
       
-      // Get the API key from storage
-      const { geminiApiKey } = await chrome.storage.sync.get(['geminiApiKey']);
-      
-      if (!geminiApiKey) {
-        alert('Please set your Gemini API key in the extension popup');
-        return;
-      }
-
-      // Click the reply button to open the reply modal
-      const replyButton = postElement.querySelector('[data-testid="reply"]');
-      replyButton?.click();
-
-      // Wait for the reply textarea with retries
-      let tweetTextArea = null;
-      for (let i = 0; i < 25; i++) {  // Try for up to 5 seconds (25 * 200ms)
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-        // Try multiple selectors to find the textarea
-        const selectors = [
-          '[data-testid="tweetTextarea_0"]',
-          '#layers textarea',
-          '#layers [role="textbox"]',
-          '#layers div[contenteditable="true"]',
-          // The full specific selector as fallback
-          '#layers > div:nth-child(2) > div > div > div > div > div > div.css-175oi2r.r-1ny4l3l.r-18u37iz.r-1pi2tsx.r-1777fci.r-1xcajam.r-ipm5af.r-g6jmlv.r-1habvwh > div.css-175oi2r.r-1wbh5a2.r-htvplk.r-1udh08x.r-1867qdf.r-rsyp9y.r-1pjcn9w.r-1potc6q > div > div > div > div:nth-child(3) > div.css-175oi2r.r-kemksi.r-1h8ys4a.r-dq6lxq.r-hucgq0 > div:nth-child(2) > div > div > div > div.css-175oi2r.r-18u37iz.r-184en5c > div.css-175oi2r.r-1iusvr4.r-16y2uox.r-1777fci.r-1h8ys4a.r-1bylmt5.r-13tjlyg.r-7qyjyx.r-1ftll1t > div > div > div > div > div > div > div > div > div > div > div > div > div.css-175oi2r.r-1wbh5a2.r-16y2uox > div > textarea'
-        ];
-
-        for (const selector of selectors) {
-          const element = document.querySelector(selector);
-          if (element) {
-            console.log('Found textarea element with selector:', selector);
-            tweetTextArea = element;
-            break;
-          }
+      // Find the Quote button by looking for the text content
+      document.querySelectorAll('[role="menuitem"]').forEach(item => {
+        if (item.textContent.includes('Quote')) {
+          quoteButton = item;
         }
-        
-        if (tweetTextArea) break;
-      }
-      
-      if (!tweetTextArea) {
-        throw new Error('Could not find reply textarea after waiting');
-      }
-
-      // Send message to background script
-      const response = await chrome.runtime.sendMessage({
-        type: 'GENERATE_RESPONSE',
-        context
       });
 
-      if (response.success) {
+      if (!quoteButton) {
+        throw new Error('Could not find Quote option');
+      }
+      quoteButton.click();
+    } else {
+      const replyButton = postElement.querySelector('[data-testid="reply"]');
+      replyButton?.click();
+    }
+
+    // Wait for the textarea with retries
+    let tweetTextArea = null;
+    for (let i = 0; i < 25; i++) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+      tweetTextArea = document.querySelector('[data-testid="tweetTextarea_0"]') ||
+                     document.querySelector('#layers textarea') ||
+                     document.querySelector('#layers [role="textbox"]') ||
+                     document.querySelector('#layers div[contenteditable="true"]');
+      if (tweetTextArea) break;
+    }
+
+    if (!tweetTextArea) {
+      throw new Error('Could not find tweet textarea');
+    }
+
+    // Generate the response
+    const response = await chrome.runtime.sendMessage({
+      type: isQRT ? 'GENERATE_QRT' : 'GENERATE_RESPONSE',
+      context
+    });
+
+    if (response.success) {
+      // Set the generated text in the textarea
+      const setText = async (element) => {
+        await new Promise(resolve => setTimeout(resolve, 500));
         try {
-          // More gentle approach to setting text
-          const setText = async (element) => {
-            // Wait a bit for Twitter's UI to stabilize
-            await new Promise(resolve => setTimeout(resolve, 500));
-
-            // Try different methods to set text
-            try {
-              // Method 1: Direct value setting
-              element.value = response.text;
-            } catch (e) {
-              console.warn('Method 1 failed:', e);
-            }
-
-            try {
-              // Method 2: Clipboard method
-              const originalClipboard = await navigator.clipboard.readText().catch(() => '');
-              await navigator.clipboard.writeText(response.text);
-              element.focus();
-              document.execCommand('paste');
-              await navigator.clipboard.writeText(originalClipboard);
-            } catch (e) {
-              console.warn('Method 2 failed:', e);
-            }
-
-            try {
-              // Method 3: Input events only
-              const inputEvent = new InputEvent('input', {
-                bubbles: true,
-                cancelable: true,
-                data: response.text,
-                inputType: 'insertText'
-              });
-              element.dispatchEvent(inputEvent);
-            } catch (e) {
-              console.warn('Method 3 failed:', e);
-            }
-          };
-
-          // Try to set text with retries
-          let success = false;
-          for (let i = 0; i < 3; i++) {
-            try {
-              await setText(tweetTextArea);
-              success = true;
-              break;
-            } catch (e) {
-              console.warn(`Attempt ${i + 1} failed:`, e);
-              await new Promise(resolve => setTimeout(resolve, 500));
-            }
-          }
-
-          if (!success) {
-            // Fallback: Show manual copy dialog
-            const shouldCopy = confirm('Could not auto-insert text. Click OK to copy to clipboard instead.');
-            if (shouldCopy) {
-              await navigator.clipboard.writeText(response.text);
-              alert('Response copied to clipboard! You can now paste it manually.');
-            }
-          }
-
+          element.value = response.text;
+          element.dispatchEvent(new Event('input', { bubbles: true }));
         } catch (e) {
-          console.warn('Error setting text:', e);
-          // Final fallback
           await navigator.clipboard.writeText(response.text);
           alert('Text copied to clipboard - please paste it manually (Ctrl/Cmd + V)');
         }
-      } else {
-        throw new Error(response.error);
-      }
-    } catch (error) {
-      console.error('Generation failed:', error);
-      alert('Failed to generate response. Please try again.');
-    } finally {
-      // Reset button state
-      generateButton.textContent = 'Generate';
-      generateButton.disabled = false;
+      };
+
+      await setText(tweetTextArea);
+    } else {
+      throw new Error(response.error);
     }
-  };
-  
-  buttonContainer.appendChild(generateButton);
-  actionsBar.appendChild(buttonContainer);
+  } catch (error) {
+    console.error('Generation failed:', error);
+    alert('Failed to generate response. Please try again.');
+  } finally {
+    // Reset button state
+    button.textContent = originalText;
+    button.disabled = false;
+  }
 }
 
 // Function to process a single tweet
@@ -290,6 +254,34 @@ function initialize() {
     }
   `;
   document.head.appendChild(style);
+  
+  // Add styles for the buttons
+  const style2 = document.createElement('style');
+  style2.textContent = `
+    .gemini-generate-buttons {
+      display: flex;
+      gap: 8px;
+      margin-left: 8px;
+    }
+    .gemini-generate-buttons button {
+      background-color: #1da1f2;
+      color: white;
+      border: none;
+      padding: 4px 12px;
+      border-radius: 16px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: bold;
+    }
+    .gemini-generate-buttons button:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+    .gemini-generate-buttons button:hover:not(:disabled) {
+      background-color: #1991da;
+    }
+  `;
+  document.head.appendChild(style2);
 }
 
 // Start the extension
