@@ -4,29 +4,91 @@ async function extractPostContext(postElement) {
   // Get main tweet text
   const tweetText = postElement.querySelector('[data-testid="tweetText"]')?.textContent?.trim() || '';
 
-  // Get quoted tweet using more specific selectors
-  const quotedTweetContainer = postElement.querySelector('div.css-175oi2r.r-adacv.r-1udh08x.r-1kqtdi0.r-1867qdf.r-rs99b7.r-o7ynqc.r-6416eg.r-1ny4l3l.r-1loqt21');
-  let quotedTweet = '';
-  let quotedAuthor = '';
+  // Get parent tweet by following the thread structure
+  let parentTweet = '';
+  let parentAuthor = '';
+  let originalTweet = '';
+  let originalAuthor = '';
 
-  if (quotedTweetContainer) {
-    // Try to get the quoted tweet text
-    const quotedTextElement = quotedTweetContainer.querySelector('[data-testid="tweetText"]');
-    if (quotedTextElement) {
-      quotedTweet = quotedTextElement.textContent.trim();
+  // Track images from both current tweet and original tweet
+  let allImages = [];
+  let allImageUrls = [];
+
+  // Function to extract images from an article
+  const extractImagesFromArticle = async (article) => {
+    const images = [];
+    const imageUrls = [];
+    const imageElements = article.querySelectorAll('img[src*="media"]');
+    
+    for (const img of imageElements) {
+      imageUrls.push(img.src);
+      try {
+        const response = await fetch(img.src);
+        const blob = await response.blob();
+        const base64 = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result.split(',')[1]);
+          reader.readAsDataURL(blob);
+        });
+        images.push(base64);
+      } catch (error) {
+        console.warn('Failed to process image:', error);
+      }
+    }
+    return { images, imageUrls };
+  };
+
+  // Find the thread container
+  const threadContainer = postElement.closest('div[aria-label="Timeline: Conversation"]');
+  if (threadContainer) {
+    // Find the original tweet (first tweet in the thread)
+    const originalArticle = threadContainer.querySelector('article');
+    if (originalArticle) {
+      originalTweet = originalArticle.querySelector('[data-testid="tweetText"]')?.textContent?.trim() || '';
+      originalAuthor = originalArticle.querySelector('[data-testid="User-Name"]')?.textContent?.trim() || '';
+      
+      // Get images from original tweet
+      const { images: origImages, imageUrls: origUrls } = await extractImagesFromArticle(originalArticle);
+      allImages = [...allImages, ...origImages];
+      allImageUrls = [...allImageUrls, ...origUrls];
     }
 
-    // Try to get the quoted tweet author
-    const quotedAuthorElement = quotedTweetContainer.querySelector('[data-testid="User-Name"]');
-    if (quotedAuthorElement) {
-      quotedAuthor = quotedAuthorElement.textContent.trim();
+    // Find the immediate parent tweet (the one directly above)
+    const articles = Array.from(threadContainer.querySelectorAll('article'));
+    const currentIndex = articles.indexOf(postElement);
+    if (currentIndex > 0) {
+      // Check if this tweet is part of a thread by looking for the thread indicator
+      const isInThread = postElement.closest('.r-1ut4w64') || // Thread indicator class
+                        postElement.closest('[role="link"]')?.closest('article')?.previousElementSibling?.querySelector('.r-1bnu78o'); // Thread line element
+      
+      if (isInThread) {
+        const parentArticle = articles[currentIndex - 1];
+        parentTweet = parentArticle.querySelector('[data-testid="tweetText"]')?.textContent?.trim() || '';
+        parentAuthor = parentArticle.querySelector('[data-testid="User-Name"]')?.textContent?.trim() || '';
+      }
     }
   }
 
-  // Combine text, preserving original formatting
+  // Get images from current tweet
+  const { images: currentImages, imageUrls: currentUrls } = await extractImagesFromArticle(postElement);
+  allImages = [...allImages, ...currentImages];
+  allImageUrls = [...allImageUrls, ...currentUrls];
+
+  console.log('Found image elements:', allImageUrls.length);
+
+  // Combine text with proper thread context
   let fullText = tweetText;
-  if (quotedTweet) {
-    fullText += `\nQuoted Tweet${quotedAuthor ? ` from ${quotedAuthor}` : ''}: "${quotedTweet}"`;
+  
+  // Add immediate parent tweet context if it exists
+  if (parentTweet && parentAuthor) {
+    fullText = `${fullText}\n\nReplying to ${parentAuthor}'s tweet: "${parentTweet}"`;
+  }
+  
+  // Add original tweet context if this isn't the original tweet and it's different from parent
+  if (originalTweet && originalAuthor && 
+      originalTweet !== tweetText && 
+      originalTweet !== parentTweet) {
+    fullText = `${fullText}\n\nOriginal tweet by ${originalAuthor}: "${originalTweet}"`;
   }
 
   // Get meaningful links (exclude internal twitter/x links)
@@ -40,41 +102,23 @@ async function extractPostContext(postElement) {
   }
 
   console.log('Found tweet text:', fullText);
+  console.log('Found parent tweet:', parentTweet);
+  console.log('Found parent author:', parentAuthor);
 
-  // More robust author extraction
+  // Get author
   const authorElement = postElement.querySelector(':scope > div [data-testid="User-Name"]') || 
                        postElement.querySelector(':scope > div [data-testid="author-name"]');
   const authorName = authorElement?.textContent?.trim() || '';
   
   console.log('Found author:', authorName);
 
-  // Extract images
-  const images = [];
-  const imageElements = postElement.querySelectorAll('img[src*="media"]');
-  console.log('Found image elements:', imageElements.length);
-
-  for (const img of imageElements) {
-    try {
-      const response = await fetch(img.src);
-      const blob = await response.blob();
-      const base64 = await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result.split(',')[1]);
-        reader.readAsDataURL(blob);
-      });
-      images.push(base64);
-    } catch (error) {
-      console.warn('Failed to process image:', error);
-    }
-  }
-
   const context = {
     text: fullText,
     author: authorName,
-    parentTweet: quotedTweet,
-    quotedAuthor: quotedAuthor || '',
-    images: images.length > 0 ? images : null,
-    imageUrls: Array.from(imageElements).map(img => img.src),
+    parentTweet,
+    quotedAuthor: '',
+    images: allImages.length > 0 ? allImages : null,
+    imageUrls: allImageUrls,
     timestamp: new Date().toISOString()
   };
 
