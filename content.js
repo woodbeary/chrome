@@ -237,6 +237,21 @@ async function handleGeneration(postElement, isQRT) {
       };
 
       await setText(tweetTextArea);
+
+      // Find the tweet button and observe it for clicks
+      const tweetButton = document.querySelector('[data-testid="tweetButton"]');
+      if (tweetButton) {
+        tweetButton.addEventListener('click', async () => {
+          // Wait a bit for the tweet to post
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          // Find and click the like button on the original post
+          const likeButton = postElement.querySelector('[data-testid="like"]');
+          if (likeButton && !likeButton.querySelector('[data-testid="unlike"]')) {
+            likeButton.click();
+          }
+        });
+      }
     } else {
       throw new Error(response.error);
     }
@@ -248,6 +263,33 @@ async function handleGeneration(postElement, isQRT) {
     button.textContent = originalText;
     button.disabled = false;
   }
+}
+
+// Helper function to wait for an element
+function waitForElement(selector, timeout = 5000) {
+  return new Promise((resolve) => {
+    if (document.querySelector(selector)) {
+      return resolve(document.querySelector(selector));
+    }
+
+    const observer = new MutationObserver(() => {
+      if (document.querySelector(selector)) {
+        observer.disconnect();
+        resolve(document.querySelector(selector));
+      }
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+
+    // Timeout after specified duration
+    setTimeout(() => {
+      observer.disconnect();
+      resolve(null);
+    }, timeout);
+  });
 }
 
 // Function to process a single tweet
