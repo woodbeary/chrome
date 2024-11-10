@@ -19,13 +19,16 @@
     {
       "matches": [
         "https://twitter.com/*",
-        "https://x.com/*"
+        "https://x.com/*",
+        "https://ads.x.com/*"
       ],
       "js": ["content.js"],
-      "css": ["styles.css"]
+      "css": ["styles.css"],
+      "type": "module"
     }
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   }
 }

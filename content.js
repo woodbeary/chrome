@@ -245,6 +245,9 @@ async function handleGeneration(postElement, isQRT) {
           // Wait a bit for the tweet to post
           await new Promise(resolve => setTimeout(resolve, 2000));
           
+          // Increment post count
+          incrementPostCount();
+          
           // Find and click the like button on the original post
           const likeButton = postElement.querySelector('[data-testid="like"]');
           if (likeButton && !likeButton.querySelector('[data-testid="unlike"]')) {
@@ -507,6 +510,11 @@ function initialize() {
     }
   `;
   document.head.appendChild(style2);
+
+  observeForModal();
+
+  // Initialize progress bar
+  updateProgressBar();
 }
 
 // Start the extension
@@ -522,27 +530,203 @@ new MutationObserver(() => {
   }
 }).observe(document, { subtree: true, childList: true });
 
-// Extracting context from the tweet
-function extractContext(articleElement) {
-  const tweetTextElement = articleElement.querySelector('[data-testid="tweetText"]');
-  const authorElement = articleElement.querySelector('[data-testid="User-Name"]');
-  const parentTweetElement = articleElement.closest('[role="article"]').previousElementSibling?.querySelector('[data-testid="tweetText"]');
+async function handlePopulate() {
+  const imageInput = document.querySelector('.DrawerModal.Modal .ViewNavigator-view.is-active .Panel-body input[placeholder*="demin_jeans"]') ||
+                    document.querySelector('.DrawerModal.Modal .ViewNavigator-view.is-active .Panel-body input[aria-labelledby="feather-form-field-text-86"]');
+  
+  console.log('Looking for image input with specific selectors');
 
-  const text = tweetTextElement ? tweetTextElement.innerText : '';
-  const author = authorElement ? authorElement.innerText : '';
-  const parentTweet = parentTweetElement ? parentTweetElement.innerText : '';
+  if (!imageInput || !imageInput.value) {
+    console.log('No image URL found');
+    return;
+  }
 
-  return {
-    text,
-    author,
-    parentTweet,
-    images: null,
-    imageUrls: [],
-    timestamp: new Date().toISOString()
-  };
+  const imageUrl = imageInput.value.trim();
+  console.log('Processing image URL:', imageUrl);
+
+  try {
+    console.log('Sending message to background.js...');
+    const response = await chrome.runtime.sendMessage({
+      type: 'GENERATE_PRODUCT',
+      context: {
+        imageUrl: imageUrl
+      }
+    });
+
+    console.log('Received response:', response);
+
+    if (!response.success) {
+      console.error('Error response:', response);
+      throw new Error(response.error);
+    }
+
+    // Updated selectors to match the exact fields
+    const fields = {
+      title: document.querySelector('input[aria-labelledby="feather-form-field-text-69"]'), // Product title
+      description: document.querySelector('textarea[aria-labelledby="feather-form-field-text-70"]'), // Product description
+      brand: document.querySelector('input[aria-labelledby="feather-form-field-text-89"]') // Brand field
+    };
+
+    console.log('Found form fields:', fields);
+
+    // Populate title
+    if (fields.title) {
+      fields.title.value = response.title || '';
+      fields.title.dispatchEvent(new Event('input', { bubbles: true }));
+      console.log('Set title to:', response.title);
+    }
+
+    // Populate description
+    if (fields.description) {
+      fields.description.value = response.description || '';
+      fields.description.dispatchEvent(new Event('input', { bubbles: true }));
+      console.log('Set description to:', response.description);
+    }
+
+    // Always set brand to 'imjacoblopez'
+    if (fields.brand) {
+      fields.brand.value = 'imjacoblopez';
+      fields.brand.dispatchEvent(new Event('input', { bubbles: true }));
+      console.log('Set brand to: imjacoblopez');
+    }
+
+    console.log('Form fields populated successfully');
+
+  } catch (error) {
+    console.error('Failed to populate fields:', error);
+    alert(`Failed to generate product content: ${error.message}`);
+  }
 }
 
-// Example usage
-const articleElement = document.querySelector('article[role="article"]');
-const context = extractContext(articleElement);
-console.log('Final extracted context:', context);
+// Helper function to extract product type from URL
+function extractProductType(url) {
+  const lowercase = url.toLowerCase();
+  if (lowercase.includes('hoodie')) return 'HOOD';
+  if (lowercase.includes('shirt')) return 'SHIRT';
+  if (lowercase.includes('hat')) return 'HAT';
+  return 'ITEM';
+}
+
+function injectPopulateButton() {
+  console.log('Checking for modal drawer...');
+  
+  // Find the modal drawer
+  const modalDrawer = document.querySelector('.DrawerModal.Modal');
+  if (!modalDrawer) {
+    console.log('Modal drawer not found');
+    return;
+  }
+
+  // Find all Panel-footer elements within the modal
+  const footers = modalDrawer.querySelectorAll('.Panel-footer');
+  footers.forEach(footer => {
+    if (footer.querySelector('.generate-product-button')) {
+      return;
+    }
+
+    // Create the generate button
+    const generateButton = document.createElement('button');
+    generateButton.className = 'Button Button--primary generate-product-button';
+    generateButton.tabIndex = '0';
+    generateButton.type = 'button';
+    generateButton.style.marginRight = '8px';
+    
+    const buttonLabel = document.createElement('span');
+    buttonLabel.className = 'Button-label';
+    buttonLabel.textContent = 'Generate Product';
+    
+    generateButton.appendChild(buttonLabel);
+    
+    // Add click handler
+    generateButton.onclick = () => {
+      console.log('Generate button clicked');
+      try {
+        handlePopulate();
+      } catch (error) {
+        console.log('Generation failed:', error);
+      }
+    };
+
+    // Insert at the start of the footer
+    footer.insertBefore(generateButton, footer.firstChild);
+  });
+}
+
+// Update the observer to watch for view changes
+function observeForModal() {
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      mutation.addedNodes.forEach((node) => {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          // Check for new modal or view changes
+          if (node.classList?.contains('DrawerModal') || 
+              node.classList?.contains('ViewNavigator-view') ||
+              node.classList?.contains('Panel-footer')) {
+            injectPopulateButton();
+          }
+          
+          // Also check children
+          const modal = node.querySelector('.DrawerModal');
+          const view = node.querySelector('.ViewNavigator-view');
+          const footer = node.querySelector('.Panel-footer');
+          if (modal || view || footer) {
+            injectPopulateButton();
+          }
+        }
+      });
+    });
+  });
+
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+}
+
+function createProgressWidget() {
+  const widget = document.createElement('div');
+  widget.className = 'post-progress-widget';
+  widget.innerHTML = `
+    <div class="progress-bar">
+      <div class="progress-fill"></div>
+    </div>
+    <div class="progress-text">0/200 posts today</div>
+  `;
+  document.body.appendChild(widget);
+  return widget;
+}
+
+function updateProgressBar() {
+  const today = new Date().toDateString();
+  const stored = JSON.parse(localStorage.getItem('postProgress') || '{}');
+  
+  // Reset if it's a new day
+  if (stored.date !== today) {
+    stored.date = today;
+    stored.count = 0;
+  }
+  
+  const widget = document.querySelector('.post-progress-widget') || createProgressWidget();
+  const fill = widget.querySelector('.progress-fill');
+  const text = widget.querySelector('.progress-text');
+  
+  const percentage = Math.min((stored.count / 200) * 100, 100);
+  fill.style.width = `${percentage}%`;
+  text.textContent = `${stored.count}/200 posts today`;
+  
+  localStorage.setItem('postProgress', JSON.stringify(stored));
+}
+
+function incrementPostCount() {
+  const today = new Date().toDateString();
+  const stored = JSON.parse(localStorage.getItem('postProgress') || '{}');
+  
+  if (stored.date !== today) {
+    stored.date = today;
+    stored.count = 0;
+  }
+  
+  stored.count++;
+  localStorage.setItem('postProgress', JSON.stringify(stored));
+  updateProgressBar();
+}
