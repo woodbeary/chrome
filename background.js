@@ -1,5 +1,40 @@
 import { createProductPrompt } from './product_prompt.js';
 
+// Track if the extension is activated (authenticated)
+let isExtensionActivated = false;
+
+// Forcibly set to false on initialization to ensure security
+chrome.storage.sync.set({ extensionAuthenticated: false }, () => {
+  console.log('📊 Extension activation reset to false on initialization for security');
+  
+  // Notify only tabs that match our content script permissions
+  // This prevents errors when sending messages to tabs where our content script isn't loaded
+  chrome.tabs.query({
+    url: [
+      "https://twitter.com/*",
+      "https://x.com/*",
+      "https://ads.x.com/*"
+    ]
+  }, (tabs) => {
+    console.log(`Found ${tabs.length} tab(s) that might have our content script`);
+    
+    tabs.forEach(tab => {
+      // Use a more reliable way to send messages that doesn't throw uncaught errors
+      chrome.tabs.sendMessage(tab.id, {
+        type: 'ACTIVATION_STATUS_CHANGED',
+        activated: false
+      }, response => {
+        // Check for errors but don't throw if there's no response
+        // This will silently fail for tabs without our content script
+        const error = chrome.runtime.lastError;
+        if (error) {
+          console.log(`Could not send message to tab ${tab.id}: ${error.message}`);
+        }
+      });
+    });
+  });
+});
+
 // This will be used later for handling API requests
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('📩 Background received message:', JSON.stringify(request, null, 2));
@@ -9,6 +44,91 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('🔍 Background received PING request');
     sendResponse({ success: true, message: 'PONG', timestamp: new Date().toISOString() });
     return true;
+  }
+
+  // Handler for activation status changes
+  if (request.type === 'ACTIVATE_EXTENSION') {
+    console.log('🔓 Background received ACTIVATE_EXTENSION request:', request.activated);
+    isExtensionActivated = request.activated === true;
+    
+    // Store activation status
+    chrome.storage.sync.set({ extensionAuthenticated: isExtensionActivated }, () => {
+      console.log('📊 Extension activation status saved:', isExtensionActivated);
+    });
+    
+    // Notify content scripts in relevant tabs only
+    chrome.tabs.query({
+      url: [
+        "https://twitter.com/*",
+        "https://x.com/*",
+        "https://ads.x.com/*"
+      ]
+    }, (tabs) => {
+      console.log(`Notifying ${tabs.length} tab(s) about activation change`);
+      
+      tabs.forEach(tab => {
+        chrome.tabs.sendMessage(tab.id, {
+          type: 'ACTIVATION_STATUS_CHANGED',
+          activated: isExtensionActivated
+        }, response => {
+          // Safely handle missing receivers
+          const error = chrome.runtime.lastError;
+          if (error) {
+            console.log(`Could not send activation update to tab ${tab.id}: ${error.message}`);
+          }
+        });
+      });
+    });
+    
+    sendResponse({ 
+      success: true, 
+      message: `Extension ${isExtensionActivated ? 'activated' : 'deactivated'}`,
+      activated: isExtensionActivated
+    });
+    return true;
+  }
+  
+  // Handler for activation status checks
+  if (request.type === 'GET_ACTIVATION_STATUS') {
+    console.log('🔍 Background received GET_ACTIVATION_STATUS request');
+    try {
+      sendResponse({ 
+        success: true, 
+        activated: isExtensionActivated
+      });
+    } catch (e) {
+      console.error('Error sending activation status response:', e);
+      sendResponse({ 
+        success: false, 
+        error: e.message
+      });
+    }
+    return true; // Important: return true for asynchronous response
+  }
+
+  // Request handlers - modify functionality based on activation state
+
+  // This is called by the extension for all operations to check activation
+  function isExtensionAuthorized() {
+    return isExtensionActivated === true;
+  }
+
+  // This function is used for logging attempts to use the extension while not activated
+  function rejectUnauthorizedRequest(requestType, sendResponse) {
+    console.error(`❌ [SECURITY] Blocked unauthorized request: ${requestType}`);
+    if (sendResponse) {
+      sendResponse({ 
+        success: false, 
+        error: 'Extension not activated. Please authenticate in the extension popup.' 
+      });
+    }
+    return false;
+  }
+
+  // Require activation for all other API operations
+  if (!isExtensionAuthorized() && 
+      ['TEST_GEMINI_API', 'GENERATE_PRODUCT', 'GENERATE_RESPONSE', 'GENERATE_QRT'].includes(request.type)) {
+    return rejectUnauthorizedRequest(request.type, sendResponse);
   }
 
   if (request.type === 'TEST_GEMINI_API') {

@@ -1,3 +1,117 @@
+// Import the environment variables
+import { ENV } from './manifest.env.js';
+
+// Get the password from environment variables
+const EXTENSION_PASSWORD = ENV.EXTENSION_PASSWORD;
+
+// Function to check authentication state
+function checkAuthentication() {
+  chrome.storage.sync.get(['extensionAuthenticated'], (result) => {
+    if (result.extensionAuthenticated) {
+      document.body.classList.add('authenticated');
+      
+      // Check for existing API key after authentication
+      chrome.storage.sync.get(['geminiApiKey'], (keyResult) => {
+        updateUIState(!!keyResult.geminiApiKey);
+      });
+    } else {
+      document.body.classList.remove('authenticated');
+    }
+  });
+}
+
+// Validate password against API endpoint or environment variable
+document.getElementById('validatePassword').addEventListener('click', async () => {
+  const password = document.getElementById('authPassword').value.trim();
+  const passwordStatus = document.getElementById('passwordStatus');
+  
+  if (!password) {
+    passwordStatus.textContent = 'Please enter a password';
+    passwordStatus.className = 'status error';
+    return;
+  }
+  
+  // Show loading state
+  const validateButton = document.getElementById('validatePassword');
+  const originalButtonText = validateButton.textContent;
+  validateButton.textContent = 'Validating...';
+  validateButton.disabled = true;
+  
+  try {
+    // Option 1: Compare against environment variable (current implementation)
+    // This is a fallback method if API validation fails
+    let isValid = (password === ENV.EXTENSION_PASSWORD);
+    
+    // Option 2: Validate using API endpoint (try first)
+    if (ENV.API_VALIDATION_ENDPOINT) {
+      try {
+        const response = await fetch(ENV.API_VALIDATION_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ password }),
+          mode: 'cors',
+          credentials: 'omit'
+        });
+        
+        // If API response is successful, use that validation result instead
+        if (response.ok) {
+          const data = await response.json();
+          isValid = data.valid === true;
+          
+          // If the API returned a Gemini API key, store it
+          if (data.geminiApiKey) {
+            chrome.storage.sync.set({ geminiApiKey: data.geminiApiKey }, () => {
+              console.log('API key from server saved successfully!');
+            });
+          }
+        }
+      } catch (apiError) {
+        console.warn('API validation failed, falling back to environment variable check:', apiError);
+        // Continue with the environment variable check (isValid already set above)
+      }
+    }
+    
+    if (isValid) {
+      // Store authentication state
+      chrome.storage.sync.set({ extensionAuthenticated: true }, () => {
+        passwordStatus.textContent = 'Authentication successful!';
+        passwordStatus.className = 'status success';
+        
+        // Notify background script that extension is activated
+        chrome.runtime.sendMessage({ 
+          type: 'ACTIVATE_EXTENSION', 
+          activated: true 
+        });
+        
+        // Update UI after successful authentication
+        setTimeout(() => {
+          document.body.classList.add('authenticated');
+        }, 1000);
+      });
+    } else {
+      passwordStatus.textContent = 'Invalid password. Please try again.';
+      passwordStatus.className = 'status error';
+      
+      // Ensure extension is deactivated
+      chrome.storage.sync.set({ extensionAuthenticated: false });
+      chrome.runtime.sendMessage({ 
+        type: 'ACTIVATE_EXTENSION', 
+        activated: false 
+      });
+    }
+  } catch (error) {
+    console.error('Authentication error:', error);
+    passwordStatus.textContent = 'Authentication error. Please try again.';
+    passwordStatus.className = 'status error';
+  } finally {
+    // Reset button state
+    validateButton.textContent = originalButtonText;
+    validateButton.disabled = false;
+  }
+});
+
 // Function to update UI based on API key presence
 function updateUIState(hasKey) {
   const keyStatus = document.getElementById('keyStatus');
@@ -140,7 +254,6 @@ document.getElementById('clearKey').addEventListener('click', () => {
 
 // Check for existing API key on popup open
 window.addEventListener('load', () => {
-  chrome.storage.sync.get(['geminiApiKey'], (result) => {
-    updateUIState(!!result.geminiApiKey);
-  });
+  // First check authentication status
+  checkAuthentication();
 });

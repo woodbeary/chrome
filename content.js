@@ -1,4 +1,90 @@
+// Global variable to track if the extension is activated
+let isExtensionActivated = false;
+let isInitialized = false;
+let isInitializing = false;
+
+// Immediately remove any existing UI elements on page load
+removeExtensionUI();
+
+// Check activation status on initialization
+async function checkActivationStatus() {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ type: 'GET_ACTIVATION_STATUS' }, (response) => {
+        // Check for runtime error first (this occurs if background script isn't ready)
+        const error = chrome.runtime.lastError;
+        if (error) {
+          console.error('❌ Error checking activation status:', error.message);
+          isExtensionActivated = false;
+          removeExtensionUI();
+          resolve(false);
+          return;
+        }
+        
+        if (response && response.success) {
+          isExtensionActivated = response.activated;
+          console.log('📊 Extension activation status:', isExtensionActivated);
+          
+          // If not activated, make sure UI is removed
+          if (!isExtensionActivated) {
+            removeExtensionUI();
+          }
+        } else {
+          isExtensionActivated = false;
+          console.error('❌ Failed to get activation status - invalid response');
+          removeExtensionUI();
+        }
+        resolve(isExtensionActivated);
+      });
+    } catch (err) {
+      // Fallback error handling
+      console.error('❌ Exception during activation check:', err);
+      isExtensionActivated = false;
+      removeExtensionUI();
+      resolve(false);
+    }
+  });
+}
+
+// Listen for activation status changes from background script
+chrome.runtime.onMessage.addListener((message) => {
+  if (message && message.type === 'ACTIVATION_STATUS_CHANGED') {
+    const wasActivated = isExtensionActivated;
+    isExtensionActivated = message.activated === true;
+    console.log('📊 Extension activation status changed:', isExtensionActivated);
+    
+    // If newly activated, initialize features
+    if (isExtensionActivated && !wasActivated) {
+      initialize();
+      setupUrlObserver();
+    } 
+    // If deactivated, clean up UI and observers
+    else if (!isExtensionActivated && wasActivated) {
+      removeExtensionUI();
+      if (urlObserver) {
+        urlObserver.disconnect();
+        observerActive = false;
+      }
+    }
+  }
+  return true;
+});
+
+// Function to remove all extension UI elements
+function removeExtensionUI() {
+  // Remove all our injected buttons and elements
+  document.querySelectorAll('.gemini-generate-buttons, .post-progress-widget, .generate-product-button').forEach(el => {
+    el.remove();
+  });
+}
+
 async function extractPostContext(postElement) {
+  // Skip if extension is not activated
+  if (!isExtensionActivated) {
+    console.log('🔒 Extension not activated, skipping context extraction');
+    return null;
+  }
+  
   console.log('Extracting context from:', postElement);
 
   // Get main tweet text
@@ -129,6 +215,11 @@ async function extractPostContext(postElement) {
 
 // Create and inject the generate button
 function createGenerateButton(postElement) {
+  // Skip if extension is not activated
+  if (!isExtensionActivated) {
+    return;
+  }
+
   // Check if buttons already exist
   if (postElement.querySelector('.gemini-generate-buttons')) return;
 
@@ -387,6 +478,9 @@ function waitForElement(selector, timeout = 5000) {
 function processTweet(article) {
   if (!article || article.hasAttribute('data-gemini-processed')) return;
   
+  // CRITICAL: Skip processing if extension is not activated
+  if (!isExtensionActivated) return;
+  
   // Mark as processed to avoid duplicates
   article.setAttribute('data-gemini-processed', 'true');
   createGenerateButton(article);
@@ -556,8 +650,16 @@ function observeTimeline() {
   }
 }
 
-// Initialize the extension
+// Modify the initialize function to check activation
 function initialize() {
+  console.log('🚀 Initializing Tweet Generator Extension, activation status:', isExtensionActivated);
+  
+  // Skip initialization if not activated
+  if (!isExtensionActivated) {
+    console.log('🔒 Extension not activated, skipping initialization');
+    return;
+  }
+  
   // Start observing for new posts
   observeTimeline();
   
@@ -605,18 +707,78 @@ function initialize() {
   updateProgressBar();
 }
 
-// Start the extension
-initialize();
-
 // Re-run initialization when navigation occurs
 let lastUrl = location.href;
-new MutationObserver(() => {
-  const url = location.href;
-  if (url !== lastUrl) {
-    lastUrl = url;
-    initialize();
+let observerActive = false;
+let urlObserver = null;
+
+// Initialize URL observer only if extension is activated
+function setupUrlObserver() {
+  if (urlObserver) {
+    urlObserver.disconnect();
   }
-}).observe(document, { subtree: true, childList: true });
+  
+  // Only set up the observer if the extension is activated
+  if (isExtensionActivated) {
+    urlObserver = new MutationObserver(() => {
+      const url = location.href;
+      if (url !== lastUrl) {
+        lastUrl = url;
+        if (isExtensionActivated) {
+          console.log('URL changed, reinitializing extension...');
+          initialize();
+        }
+      }
+    });
+    
+    urlObserver.observe(document, { subtree: true, childList: true });
+    observerActive = true;
+    console.log('URL observer initialized');
+  } else {
+    observerActive = false;
+    console.log('URL observer not initialized (extension not activated)');
+  }
+}
+
+// Initialize content script with a delay to ensure background script is ready
+function initializeContentScript() {
+  // Prevent double initialization
+  if (isInitialized || isInitializing) {
+    console.log('⚠️ Content script already initialized or initializing, skipping');
+    return;
+  }
+  
+  isInitializing = true;
+  console.log('🔄 Content script loaded, initializing...');
+  
+  // Clear any UI elements first
+  removeExtensionUI();
+  
+  // Wait a moment before checking activation status
+  // This helps prevent errors when background script isn't fully initialized
+  setTimeout(() => {
+    checkActivationStatus().then((activated) => {
+      if (activated) {
+        console.log('🚀 Extension activated, initializing features...');
+        initialize();
+        setupUrlObserver();
+      } else {
+        console.log('🔒 Extension not activated, waiting for authentication');
+        // Make absolutely sure no UI elements are present
+        removeExtensionUI();
+      }
+      isInitialized = true;
+      isInitializing = false;
+    }).catch(error => {
+      console.error('❌ Error during initialization:', error);
+      removeExtensionUI();
+      isInitializing = false;
+    });
+  }, 500); // 500ms delay
+}
+
+// Start the content script
+initializeContentScript();
 
 async function handlePopulate() {
   const imageInput = document.querySelector('.DrawerModal.Modal .ViewNavigator-view.is-active .Panel-body input[placeholder*="demin_jeans"]') ||

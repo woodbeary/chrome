@@ -8,7 +8,7 @@
       padding: 10px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
-    .api-key-form {
+    .api-key-form, .password-form {
       display: flex;
       flex-direction: column;
       gap: 10px;
@@ -77,10 +77,30 @@
       font-family: monospace;
       font-size: 0.8em;
     }
+    /* Show/hide based on authentication */
+    .authenticated-content {
+      display: none;
+    }
+    .authenticated .password-form {
+      display: none;
+    }
+    .authenticated .authenticated-content {
+      display: flex;
+    }
   </style>
 </head>
 <body>
-  <div class="api-key-form">
+  <!-- Password validation form -->
+  <div class="password-form">
+    <h3>Authentication Required</h3>
+    <div class="key-status">Please enter the password to enable the extension</div>
+    <input type="password" id="authPassword" placeholder="Enter password">
+    <button id="validatePassword">Validate</button>
+    <div id="passwordStatus" class="status"></div>
+  </div>
+
+  <!-- API Key form (only shown after password validation) -->
+  <div class="authenticated-content api-key-form">
     <h3>Gemini API Settings</h3>
     <div class="key-status" id="keyStatus">No API key saved</div>
     <input type="password" id="apiKey" placeholder="Enter your Gemini API key">
@@ -95,6 +115,6 @@
     </div>
     <div id="status" class="status"></div>
   </div>
-  <script src="popup.js"></script>
+  <script src="popup.js" type="module"></script>
 </body>
 </html>
