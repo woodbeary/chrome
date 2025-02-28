@@ -3,17 +3,20 @@ function updateUIState(hasKey) {
   const keyStatus = document.getElementById('keyStatus');
   const clearKeyBtn = document.getElementById('clearKey');
   const apiKeyInput = document.getElementById('apiKey');
+  const testKeyBtn = document.getElementById('testKey');
   
   if (hasKey) {
     keyStatus.textContent = 'API key is saved';
     keyStatus.style.color = '#006700';
     clearKeyBtn.style.display = 'block';
+    testKeyBtn.style.display = 'block';
     apiKeyInput.value = ''; // Clear the input for security
     apiKeyInput.placeholder = '••••••••• (API key is saved)';
   } else {
     keyStatus.textContent = 'No API key saved';
     keyStatus.style.color = '#666';
     clearKeyBtn.style.display = 'none';
+    testKeyBtn.style.display = 'none';
     apiKeyInput.placeholder = 'Enter your Gemini API key';
   }
 }
@@ -27,6 +30,90 @@ function showStatus(message, isError = false) {
     status.className = 'status';
   }, 3000);
 }
+
+// Function to append to test results
+function appendToTestResults(message, isError = false) {
+  const testOutput = document.getElementById('testOutput');
+  const testResults = document.getElementById('testResults');
+  
+  // Show the test results container if hidden
+  testResults.style.display = 'block';
+  
+  // Create a new line with timestamp
+  const timestamp = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  line.textContent = `[${timestamp}] ${message}`;
+  
+  if (isError) {
+    line.style.color = '#dc3545';
+  }
+  
+  // Append the line to the output
+  testOutput.appendChild(line);
+  
+  // Scroll to bottom
+  testResults.scrollTop = testResults.scrollHeight;
+}
+
+// Test API Connection
+document.getElementById('testKey').addEventListener('click', async () => {
+  const testBtn = document.getElementById('testKey');
+  testBtn.disabled = true;
+  testBtn.textContent = 'Testing...';
+  
+  // Clear previous test results
+  document.getElementById('testOutput').innerHTML = '';
+  document.getElementById('testResults').style.display = 'block';
+  
+  appendToTestResults('Beginning Gemini API test...');
+  
+  try {
+    // Get the saved API key
+    const result = await chrome.storage.sync.get(['geminiApiKey']);
+    const apiKey = result.geminiApiKey;
+    
+    if (!apiKey) {
+      appendToTestResults('No API key found in storage. Please save an API key first.', true);
+      return;
+    }
+    
+    appendToTestResults(`Found API key in storage (redacted): ${apiKey.substring(0, 3)}...${apiKey.substring(apiKey.length - 3)}`);
+    
+    // Send a simple test message to Gemini
+    appendToTestResults('Sending test request to Gemini API...');
+    
+    const testMessage = {
+      type: 'TEST_GEMINI_API', 
+      prompt: 'Say hello in exactly 5 words'
+    };
+    
+    // Send the message to background script
+    appendToTestResults('Sending message to background script...');
+    
+    const response = await chrome.runtime.sendMessage(testMessage);
+    
+    appendToTestResults('Received response from background script');
+    appendToTestResults(`Response success: ${response.success}`);
+    
+    if (response.success) {
+      appendToTestResults('Test completed successfully!');
+      appendToTestResults(`Generated text: "${response.text}"`);
+      showStatus('API test successful!');
+    } else {
+      appendToTestResults(`Error: ${response.error}`, true);
+      showStatus('API test failed. See details.', true);
+    }
+  } catch (error) {
+    appendToTestResults(`Error during test: ${error.message}`, true);
+    if (error.stack) {
+      appendToTestResults(`Stack trace: ${error.stack}`, true);
+    }
+    showStatus('API test failed. See details.', true);
+  } finally {
+    testBtn.disabled = false;
+    testBtn.textContent = 'Test API Connection';
+  }
+});
 
 // Save API key
 document.getElementById('saveKey').addEventListener('click', () => {

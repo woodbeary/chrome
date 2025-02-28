@@ -2,17 +2,150 @@ import { createProductPrompt } from './product_prompt.js';
 
 // This will be used later for handling API requests
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('Background received message:', request);
+  console.log('📩 Background received message:', JSON.stringify(request, null, 2));
+  console.log('📩 Message sender:', JSON.stringify(sender, null, 2));
+
+  if (request.type === 'PING') {
+    console.log('🔍 Background received PING request');
+    sendResponse({ success: true, message: 'PONG', timestamp: new Date().toISOString() });
+    return true;
+  }
+
+  if (request.type === 'TEST_GEMINI_API') {
+    console.log('🧪 Background received TEST_GEMINI_API request');
+    
+    // Handle the test request asynchronously
+    (async () => {
+      try {
+        console.log('🧪 Starting Gemini API test with prompt:', request.prompt);
+        
+        // Get the API key from storage
+        const { geminiApiKey } = await chrome.storage.sync.get(['geminiApiKey']);
+        if (!geminiApiKey) {
+          console.error('❌ TEST_GEMINI_API - API key not found in storage');
+          sendResponse({ 
+            success: false, 
+            error: 'API key not found in storage' 
+          });
+          return;
+        }
+        
+        console.log('🧪 TEST_GEMINI_API - Using API key (redacted):', 
+          geminiApiKey.substring(0, 3) + '...' + geminiApiKey.substring(geminiApiKey.length - 3));
+        
+        // Create a simple test request to Gemini
+        const baseUrl = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent';
+        const url = `${baseUrl}?key=${geminiApiKey}`;
+        
+        const requestBody = {
+          contents: [{
+            parts: [{ 
+              text: request.prompt || "Say hello in exactly 5 words" 
+            }]
+          }],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 30,
+            topK: 40,
+            topP: 0.95
+          }
+        };
+        
+        console.log('🧪 TEST_GEMINI_API - Request body:', JSON.stringify(requestBody, null, 2));
+        console.log('🧪 TEST_GEMINI_API - Sending request to Gemini API...');
+        
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody)
+        });
+        
+        console.log('🧪 TEST_GEMINI_API - Response status:', response.status, response.statusText);
+        
+        const responseText = await response.text();
+        console.log('🧪 TEST_GEMINI_API - Raw response:', responseText);
+        
+        if (!response.ok) {
+          console.error('❌ TEST_GEMINI_API - API request failed');
+          let errorMessage = response.statusText || 'Unknown error';
+          
+          try {
+            const errorData = JSON.parse(responseText);
+            errorMessage = errorData.error?.message || errorMessage;
+            console.error('❌ TEST_GEMINI_API - Error details:', JSON.stringify(errorData, null, 2));
+          } catch (e) {
+            console.error('❌ TEST_GEMINI_API - Failed to parse error response as JSON');
+          }
+          
+          sendResponse({ 
+            success: false, 
+            error: `API request failed: ${errorMessage}`,
+            status: response.status,
+            statusText: response.statusText
+          });
+          return;
+        }
+        
+        let data;
+        try {
+          data = JSON.parse(responseText);
+          console.log('🧪 TEST_GEMINI_API - Parsed response:', JSON.stringify(data, null, 2));
+        } catch (e) {
+          console.error('❌ TEST_GEMINI_API - Failed to parse response as JSON:', e);
+          sendResponse({ 
+            success: false, 
+            error: 'Failed to parse API response as JSON' 
+          });
+          return;
+        }
+        
+        // Extract the generated text
+        if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+          const text = data.candidates[0].content.parts[0].text.trim();
+          console.log('✅ TEST_GEMINI_API - Generated text:', text);
+          
+          sendResponse({ 
+            success: true, 
+            text: text,
+            rawResponse: data
+          });
+        } else {
+          console.error('❌ TEST_GEMINI_API - No text found in response');
+          sendResponse({ 
+            success: false, 
+            error: 'No text found in response',
+            rawResponse: data
+          });
+        }
+      } catch (error) {
+        console.error('❌ TEST_GEMINI_API - Error:', error);
+        console.error('❌ TEST_GEMINI_API - Error stack:', error.stack);
+        
+        sendResponse({ 
+          success: false, 
+          error: error.message || 'Unknown error occurred' 
+        });
+      }
+    })();
+    
+    // Return true to indicate we'll respond asynchronously
+    return true;
+  }
 
   if (request.type === 'GENERATE_PRODUCT') {
+    console.log('🏭 Handling GENERATE_PRODUCT request');
     // Handle the request asynchronously
     (async () => {
       try {
+        console.log('⏳ Starting product generation...');
         const result = await generateWithGemini(request.context);
-        console.log('Generated result:', result);
+        console.log('✅ Product generation completed, result:', JSON.stringify(result, null, 2));
         sendResponse(result);
       } catch (error) {
-        console.error('Generation error:', error);
+        console.error('❌ Product generation error:', error);
+        console.error('❌ Error stack:', error.stack);
         sendResponse({
           success: false,
           error: error.message || 'Unknown error occurred'
@@ -25,22 +158,40 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.type === 'GENERATE_RESPONSE' || request.type === 'GENERATE_QRT') {
+    console.log(`🤖 Handling ${request.type} request`);
     chrome.storage.sync.get(['geminiApiKey'], async (result) => {
       try {
+        console.log('🔑 Retrieved API key from storage');
+        if (!result.geminiApiKey) {
+          console.error('❌ API key not found in storage');
+          sendResponse({ success: false, error: 'API key not found' });
+          return;
+        }
+        
+        console.log('⏳ Starting response generation...');
         const generatedText = await generateResponse(result.geminiApiKey, request.context);
-        sendResponse({ 
+        console.log('✅ Response generation completed');
+        const response = { 
           success: true, 
           text: generatedText,
           isQRT: request.type === 'GENERATE_QRT'
-        });
+        };
+        console.log('📤 Sending response:', JSON.stringify(response, null, 2));
+        sendResponse(response);
       } catch (error) {
-        sendResponse({ success: false, error: error.message });
+        console.error('❌ Response generation error:', error);
+        console.error('❌ Error stack:', error.stack);
+        const errorResponse = { success: false, error: error.message };
+        console.log('📤 Sending error response:', JSON.stringify(errorResponse, null, 2));
+        sendResponse(errorResponse);
       }
     });
     return true; // Required for async response
   }
   if (request.type === 'VALIDATE_API_KEY') {
+    console.log('🔑 Handling VALIDATE_API_KEY request');
     validateApiKey(request.apiKey).then(isValid => {
+      console.log('📤 API key validation result:', isValid);
       sendResponse({ isValid });
     });
     return true; // Required for async response
@@ -211,14 +362,20 @@ Response:`;
 // Handle API calls to Gemini
 async function generateResponse(apiKey, context) {
   try {
-    const baseUrl = 'https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent';
+    console.log('📨 generateResponse - Starting with context:', JSON.stringify(context, null, 2));
+    
+    const baseUrl = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent';
     const url = `${baseUrl}?key=${apiKey}`;
+    console.log('📡 generateResponse - API URL:', url.replace(apiKey, 'API_KEY_REDACTED'));
+
+    const prompt = createPrompt(context);
+    console.log('🔤 generateResponse - Generated prompt:', prompt);
 
     const requestBody = {
       contents: [{
         parts: [
           { 
-            text: createPrompt(context) + '\nIMPORTANT: Generate a friendly, non-controversial response.' 
+            text: prompt + '\nIMPORTANT: Generate a friendly, non-controversial response.' 
           }
         ]
       }],
@@ -251,6 +408,7 @@ async function generateResponse(apiKey, context) {
 
     // If there are images, add them to the request
     if (context.images && context.images.length > 0) {
+      console.log('🖼️ generateResponse - Adding images to request, count:', context.images.length);
       for (const imageData of context.images) {
         requestBody.contents[0].parts.push({
           inlineData: {
@@ -261,27 +419,53 @@ async function generateResponse(apiKey, context) {
       }
     }
 
-    console.log('Request body:', JSON.stringify(requestBody, null, 2));
-
+    const requestBodyString = JSON.stringify(requestBody, null, 2);
+    console.log('📤 generateResponse - Full request body:', requestBodyString);
+    
+    console.log('⏳ generateResponse - Sending request to Gemini API...');
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(requestBody)
+      body: requestBodyString
     });
+    
+    console.log('📥 generateResponse - Response status:', response.status, response.statusText);
+    console.log('📥 generateResponse - Response headers:', JSON.stringify(Object.fromEntries([...response.headers]), null, 2));
 
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`API request failed: ${errorData.error?.message || response.statusText}`);
+      const errorText = await response.text();
+      console.error('❌ generateResponse - API error response (text):', errorText);
+      
+      let errorData;
+      try {
+        errorData = JSON.parse(errorText);
+        console.error('❌ generateResponse - API error response (parsed):', JSON.stringify(errorData, null, 2));
+      } catch (e) {
+        console.error('❌ generateResponse - Failed to parse error response as JSON');
+      }
+      
+      throw new Error(`API request failed: ${errorData?.error?.message || response.statusText || 'Unknown error'}`);
     }
 
-    const data = await response.json();
-    console.log('Raw API Response:', JSON.stringify(data, null, 2));
+    const responseText = await response.text();
+    console.log('📥 generateResponse - Raw response text:', responseText);
+    
+    let data;
+    try {
+      data = JSON.parse(responseText);
+      console.log('📥 generateResponse - Parsed API response:', JSON.stringify(data, null, 2));
+    } catch (e) {
+      console.error('❌ generateResponse - Failed to parse response as JSON:', e);
+      throw new Error('Failed to parse API response as JSON');
+    }
 
     // Updated response handling
     if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
       let text = data.candidates[0].content.parts[0].text;
+      console.log('✅ generateResponse - Raw generated text:', text);
+      
       text = text
         .replace(/\(this reply.*?\)/gi, '')
         .replace(/Note:.*$/gm, '')
@@ -296,8 +480,11 @@ async function generateResponse(apiKey, context) {
         .replace(/just saying.*$/gi, '')
         .replace(/just my.*$/gi, '')
         .trim();
+      
+      console.log('✅ generateResponse - Cleaned generated text:', text);
       return text;
     } else if (data.candidates?.[0]?.finishReason === "SAFETY") {
+      console.log('⚠️ generateResponse - Response was blocked by safety filters, retrying with safer prompt');
       // If blocked by safety filters, generate a more neutral response
       return await generateResponse(apiKey, {
         ...context,
@@ -305,10 +492,11 @@ async function generateResponse(apiKey, context) {
       });
     }
 
-    console.error('Unexpected response structure:', data);
+    console.error('❌ generateResponse - Unexpected response structure:', JSON.stringify(data, null, 2));
     throw new Error('Failed to generate response. Please try again.');
   } catch (error) {
-    console.error('Gemini API error:', error);
+    console.error('❌ generateResponse - Error:', error);
+    console.error('❌ generateResponse - Error stack:', error.stack);
     throw error;
   }
 }
@@ -316,49 +504,76 @@ async function generateResponse(apiKey, context) {
 // Update the validation function to use Gemini 1.5 Flash as well
 async function validateApiKey(apiKey) {
   try {
-    const baseUrl = 'https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent';
+    console.log('🔍 validateApiKey - Starting validation for API key (redacted):', apiKey.substring(0, 3) + '...' + apiKey.substring(apiKey.length - 3));
+    
+    const baseUrl = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent';
     const url = `${baseUrl}?key=${apiKey}`;
+    console.log('📡 validateApiKey - API URL:', url.replace(apiKey, 'API_KEY_REDACTED'));
 
+    const requestBody = {
+      contents: [{
+        parts: [{
+          text: "Hello"
+        }]
+      }],
+      generationConfig: {
+        maxOutputTokens: 10
+      }
+    };
+    
+    const requestBodyString = JSON.stringify(requestBody, null, 2);
+    console.log('📤 validateApiKey - Request body:', requestBodyString);
+
+    console.log('⏳ validateApiKey - Sending test request to validate API key...');
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{
-            text: "Hello"
-          }]
-        }],
-        generationConfig: {
-          maxOutputTokens: 10
-        }
-      })
+      body: requestBodyString
     });
     
+    console.log('📥 validateApiKey - Response status:', response.status, response.statusText);
+    
     if (!response.ok) {
+      console.error('❌ validateApiKey - API key validation failed:', response.status, response.statusText);
+      const errorText = await response.text();
+      console.error('❌ validateApiKey - Error response:', errorText);
       return false;
     }
 
-    const data = await response.json();
-    return true;
+    const responseText = await response.text();
+    console.log('📥 validateApiKey - Response text:', responseText);
+    
+    try {
+      const data = JSON.parse(responseText);
+      console.log('✅ validateApiKey - API key validation successful:', JSON.stringify(data, null, 2));
+      return true;
+    } catch (e) {
+      console.error('❌ validateApiKey - Failed to parse response as JSON:', e);
+      return false;
+    }
   } catch (error) {
-    console.error('API key validation error:', error);
+    console.error('❌ validateApiKey - API key validation error:', error);
+    console.error('❌ validateApiKey - Error stack:', error.stack);
     return false;
   }
 }
 
 async function generateWithGemini(context) {
   try {
-    console.log('Starting generateWithGemini with context:', context);
+    console.log('📨 generateWithGemini - Starting with context:', JSON.stringify(context, null, 2));
     
     const { geminiApiKey } = await chrome.storage.sync.get(['geminiApiKey']);
     if (!geminiApiKey) {
+      console.error('❌ generateWithGemini - API key not found in storage');
       throw new Error('Gemini API key not found');
     }
+    console.log('🔑 generateWithGemini - Retrieved API key (redacted):', geminiApiKey.substring(0, 3) + '...' + geminiApiKey.substring(geminiApiKey.length - 3));
 
     // Updated prompt with explicit JSON format requirement
     const prompt = createProductPrompt(context);
+    console.log('🔤 generateWithGemini - Generated prompt:', prompt);
 
     const requestBody = {
       contents: [{
@@ -372,38 +587,75 @@ async function generateWithGemini(context) {
       }
     };
 
-    console.log('Sending request to Gemini API:', requestBody);
+    const apiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${geminiApiKey}`;
+    console.log('📡 generateWithGemini - API URL:', apiUrl.replace(geminiApiKey, 'API_KEY_REDACTED'));
     
+    const requestBodyString = JSON.stringify(requestBody, null, 2);
+    console.log('📤 generateWithGemini - Full request body:', requestBodyString);
+    
+    console.log('⏳ generateWithGemini - Sending request to Gemini API...');
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${geminiApiKey}`,
+      apiUrl,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
+        body: requestBodyString
       }
     );
+    
+    console.log('📥 generateWithGemini - Response status:', response.status, response.statusText);
+    console.log('📥 generateWithGemini - Response headers:', JSON.stringify(Object.fromEntries([...response.headers]), null, 2));
 
-    const data = await response.json();
-    console.log('Raw Gemini response:', data);
+    const responseText = await response.text();
+    console.log('📥 generateWithGemini - Raw response text:', responseText);
+    
+    if (!response.ok) {
+      console.error('❌ generateWithGemini - API error response:', responseText);
+      let errorMessage = response.statusText || 'Unknown error';
+      
+      try {
+        const errorData = JSON.parse(responseText);
+        errorMessage = errorData.error?.message || errorMessage;
+        console.error('❌ generateWithGemini - Parsed error details:', JSON.stringify(errorData, null, 2));
+      } catch (e) {
+        console.error('❌ generateWithGemini - Failed to parse error response as JSON');
+      }
+      
+      throw new Error(`API request failed: ${errorMessage}`);
+    }
+    
+    let data;
+    try {
+      data = JSON.parse(responseText);
+      console.log('📥 generateWithGemini - Parsed API response:', JSON.stringify(data, null, 2));
+    } catch (e) {
+      console.error('❌ generateWithGemini - Failed to parse response as JSON:', e);
+      throw new Error('Failed to parse API response as JSON');
+    }
 
     if (!data.candidates?.[0]?.content?.parts?.[0]?.text) {
+      console.error('❌ generateWithGemini - Invalid response structure from Gemini API', JSON.stringify(data, null, 2));
       throw new Error('Invalid response structure from Gemini API');
     }
 
     // Extract and parse the JSON response
     const text = data.candidates[0].content.parts[0].text.trim();
-    console.log('Generated text:', text);
+    console.log('✅ generateWithGemini - Generated text:', text);
 
     try {
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
+        console.error('❌ generateWithGemini - No JSON object found in response');
         throw new Error('No JSON object found in response');
       }
       
+      console.log('✅ generateWithGemini - JSON match found:', jsonMatch[0]);
+      
       const parsedResponse = JSON.parse(jsonMatch[0]);
-      console.log('Parsed response:', parsedResponse);
+      console.log('✅ generateWithGemini - Parsed response:', JSON.stringify(parsedResponse, null, 2));
 
       if (!parsedResponse.title || !parsedResponse.description) {
+        console.error('❌ generateWithGemini - Missing required fields in response', JSON.stringify(parsedResponse, null, 2));
         throw new Error('Missing required fields in response');
       }
 
@@ -414,12 +666,15 @@ async function generateWithGemini(context) {
       };
 
     } catch (parseError) {
-      console.error('JSON parsing error:', parseError);
+      console.error('❌ generateWithGemini - JSON parsing error:', parseError);
+      console.error('❌ generateWithGemini - JSON parsing error stack:', parseError.stack);
+      console.error('❌ generateWithGemini - Text that failed to parse:', text);
       throw new Error('Failed to parse Gemini response as JSON');
     }
 
   } catch (error) {
-    console.error('Gemini API error:', error);
+    console.error('❌ generateWithGemini - Error:', error);
+    console.error('❌ generateWithGemini - Error stack:', error.stack);
     return {
       success: false,
       error: error.message || 'Unknown error occurred'

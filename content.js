@@ -168,20 +168,32 @@ async function handleGeneration(postElement, isQRT) {
   button.disabled = true;
 
   try {
+    console.log('📊 handleGeneration - Starting generation process, isQRT:', isQRT);
     const context = await extractPostContext(postElement);
+    console.log('📊 handleGeneration - Extracted context successfully:', context);
+    
+    console.log('📊 handleGeneration - Checking for Gemini API key in storage...');
     const { geminiApiKey } = await chrome.storage.sync.get(['geminiApiKey']);
     
     if (!geminiApiKey) {
+      console.error('❌ handleGeneration - No Gemini API key found in storage');
       alert('Please set your Gemini API key in the extension popup');
+      // Reset button state
+      button.textContent = originalText;
+      button.disabled = false;
       return;
     }
+    console.log('📊 handleGeneration - API key found in storage (redacted):', geminiApiKey.substring(0, 3) + '...' + geminiApiKey.substring(geminiApiKey.length - 3));
 
     // Click the appropriate button based on isQRT
     if (isQRT) {
+      console.log('📊 handleGeneration - Processing Quote Retweet (QRT)');
       const qrtButton = postElement.querySelector('[data-testid="retweet"]');
+      console.log('📊 handleGeneration - Found QRT button:', !!qrtButton);
       qrtButton?.click();
       
       // Wait for the dropdown menu and click Quote
+      console.log('📊 handleGeneration - Waiting for QRT dropdown menu...');
       await new Promise(resolve => setTimeout(resolve, 500));
       const quoteOption = document.querySelector('[role="menuitem"] [class*="r-bcqeeo"] span:not([dir])');
       let quoteButton = null;
@@ -194,74 +206,150 @@ async function handleGeneration(postElement, isQRT) {
       });
 
       if (!quoteButton) {
+        console.error('❌ handleGeneration - Could not find Quote option in dropdown');
         throw new Error('Could not find Quote option');
       }
+      console.log('📊 handleGeneration - Found Quote button, clicking...');
       quoteButton.click();
     } else {
+      console.log('📊 handleGeneration - Processing Reply');
       const replyButton = postElement.querySelector('[data-testid="reply"]');
+      console.log('📊 handleGeneration - Found reply button:', !!replyButton);
       replyButton?.click();
     }
 
     // Wait for the textarea with retries
+    console.log('📊 handleGeneration - Waiting for textarea to appear...');
     let tweetTextArea = null;
-    for (let i = 0; i < 25; i++) {
+    let draftEditor = null;
+    
+    // First try to find the Draft.js editor directly
+    for (let i = 0; i < 10; i++) {
       await new Promise(resolve => setTimeout(resolve, 200));
-      tweetTextArea = document.querySelector('[data-testid="tweetTextarea_0"]') ||
-                     document.querySelector('#layers textarea') ||
-                     document.querySelector('#layers [role="textbox"]') ||
-                     document.querySelector('#layers div[contenteditable="true"]');
-      if (tweetTextArea) break;
+      
+      // Try to find the draft editor container
+      draftEditor = document.querySelector('.DraftEditor-editorContainer');
+      if (draftEditor) {
+        console.log('📊 handleGeneration - Found Draft.js editor container');
+        const editableDiv = draftEditor.querySelector('[contenteditable="true"]') || 
+                           draftEditor.querySelector('[role="textbox"]');
+        
+        if (editableDiv) {
+          console.log('📊 handleGeneration - Found editable div within Draft.js editor');
+          tweetTextArea = editableDiv;
+          break;
+        }
+      }
+      
+      // Try using the exact selector the user provided
+      const exactEditor = document.querySelector('#layers > div:nth-child(2) > div > div > div > div > div > div.css-175oi2r.r-1ny4l3l.r-18u37iz.r-1pi2tsx.r-1777fci.r-1xcajam.r-ipm5af.r-g6jmlv.r-1habvwh > div.css-175oi2r.r-1wbh5a2.r-htvplk.r-1udh08x.r-1867qdf.r-rsyp9y.r-1pjcn9w.r-1potc6q > div > div > div > div:nth-child(3) > div.css-175oi2r.r-1h8ys4a.r-dq6lxq.r-hucgq0 > div:nth-child(2) > div > div > div > div.css-175oi2r.r-18u37iz.r-184en5c > div.css-175oi2r.r-1iusvr4.r-16y2uox.r-1777fci.r-1h8ys4a.r-1bylmt5.r-13tjlyg.r-7qyjyx.r-1ftll1t > div > div > div > div > div > div > div > div > div > div > div > div > div.css-175oi2r.r-1wbh5a2.r-16y2uox > div > div > div > div > div > div.DraftEditor-editorContainer > div');
+      
+      if (exactEditor) {
+        console.log('📊 handleGeneration - Found editor using exact CSS selector');
+        tweetTextArea = exactEditor;
+        break;
+      }
+    }
+    
+    // Fall back to previous methods if Draft.js editor not found
+    if (!tweetTextArea) {
+      for (let i = 0; i < 15; i++) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        tweetTextArea = document.querySelector('[data-testid="tweetTextarea_0"]') ||
+                       document.querySelector('#layers textarea') ||
+                       document.querySelector('#layers [role="textbox"]') ||
+                       document.querySelector('#layers div[contenteditable="true"]');
+        if (tweetTextArea) {
+          console.log('📊 handleGeneration - Found textarea using traditional selectors after', i+1, 'attempts');
+          break;
+        }
+      }
     }
 
     if (!tweetTextArea) {
+      console.error('❌ handleGeneration - Could not find tweet textarea after multiple attempts');
+      console.log('📷 handleGeneration - Taking DOM snapshot for debugging:');
+      console.log(document.querySelector('#layers')?.innerHTML || 'No #layers element found');
       throw new Error('Could not find tweet textarea');
     }
-
-    // Generate the response
-    const response = await chrome.runtime.sendMessage({
-      type: isQRT ? 'GENERATE_QRT' : 'GENERATE_RESPONSE',
-      context
+    
+    console.log('📊 handleGeneration - Found textarea:', {
+      tagName: tweetTextArea.tagName,
+      role: tweetTextArea.getAttribute('role'),
+      contentEditable: tweetTextArea.getAttribute('contenteditable'),
+      className: tweetTextArea.className,
+      id: tweetTextArea.id
     });
 
-    if (response.success) {
-      // Set the generated text in the textarea
-      const setText = async (element) => {
-        await new Promise(resolve => setTimeout(resolve, 500));
-        try {
-          element.value = response.text;
-          element.dispatchEvent(new Event('input', { bubbles: true }));
-        } catch (e) {
-          await navigator.clipboard.writeText(response.text);
-          alert('Text copied to clipboard - please paste it manually (Ctrl/Cmd + V)');
-        }
-      };
+    // Prepare message for background.js
+    const message = {
+      type: isQRT ? 'GENERATE_QRT' : 'GENERATE_RESPONSE',
+      context
+    };
+    console.log('📤 handleGeneration - Sending message to background.js:', JSON.stringify(message, null, 2));
 
-      await setText(tweetTextArea);
+    // Generate the response - add try/catch for better error handling
+    try {
+      console.log('⏳ handleGeneration - Awaiting response from background.js...');
+      const response = await chrome.runtime.sendMessage(message);
+      console.log('📥 handleGeneration - Received response from background.js:', response);
 
-      // Find the tweet button and observe it for clicks
-      const tweetButton = document.querySelector('[data-testid="tweetButton"]');
-      if (tweetButton) {
-        tweetButton.addEventListener('click', async () => {
-          // Wait a bit for the tweet to post
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          
-          // Increment post count
-          incrementPostCount();
-          
-          // Find and click the like button on the original post
-          const likeButton = postElement.querySelector('[data-testid="like"]');
-          if (likeButton && !likeButton.querySelector('[data-testid="unlike"]')) {
-            likeButton.click();
-          }
-        });
+      // Check for specific error conditions
+      if (!response) {
+        console.error('❌ handleGeneration - Received empty response from background.js');
+        throw new Error('Empty response from background script');
       }
-    } else {
-      throw new Error(response.error);
+
+      if (chrome.runtime.lastError) {
+        console.error('❌ handleGeneration - Chrome runtime error:', chrome.runtime.lastError);
+        throw new Error(`Chrome runtime error: ${chrome.runtime.lastError.message}`);
+      }
+
+      if (response.success) {
+        console.log('✅ handleGeneration - Generation successful, setting text in textarea');
+        
+        // Directly use our specialized function for Twitter
+        await setTextInTwitterEditor(response.text);
+        
+        // Find the tweet button and observe it for clicks
+        console.log('📊 handleGeneration - Looking for tweet button...');
+        const tweetButton = document.querySelector('[data-testid="tweetButton"]');
+        if (tweetButton) {
+          console.log('📊 handleGeneration - Found tweet button, adding click listener');
+          tweetButton.addEventListener('click', async () => {
+            console.log('📊 handleGeneration - Tweet button clicked');
+            // Wait a bit for the tweet to post
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Increment post count
+            incrementPostCount();
+            
+            // Find and click the like button on the original post
+            const likeButton = postElement.querySelector('[data-testid="like"]');
+            if (likeButton && !likeButton.querySelector('[data-testid="unlike"]')) {
+              console.log('📊 handleGeneration - Auto-liking original post');
+              likeButton.click();
+            }
+          });
+        } else {
+          console.log('⚠️ handleGeneration - No tweet button found');
+        }
+      } else {
+        console.error('❌ handleGeneration - Generation failed, response error:', response.error);
+        throw new Error(response.error || 'Generation failed');
+      }
+    } catch (sendError) {
+      console.error('❌ handleGeneration - Error during generation/sending:', sendError);
+      alert(`Error: ${sendError.message || 'Failed to generate response'}`);
+    } finally {
+      // Reset button state regardless of success/failure
+      button.textContent = originalText;
+      button.disabled = false;
     }
   } catch (error) {
-    console.error('Generation failed:', error);
-    alert('Failed to generate response. Please try again.');
-  } finally {
+    console.error('❌ handleGeneration - Unexpected error:', error);
+    alert(`An unexpected error occurred: ${error.message}`);
+    
     // Reset button state
     button.textContent = originalText;
     button.disabled = false;
@@ -729,4 +817,197 @@ function incrementPostCount() {
   stored.count++;
   localStorage.setItem('postProgress', JSON.stringify(stored));
   updateProgressBar();
+}
+
+/**
+ * Specialized function to set text in Twitter's Draft.js editor
+ * This aims to handle Twitter's complex editing environment
+ */
+async function setTextInTwitterEditor(text) {
+  console.log('📝 setTextInTwitterEditor - Starting specialized text insertion for Twitter');
+  console.log('📝 setTextInTwitterEditor - Text to insert:', text);
+  
+  try {
+    // First, try to find the Draft.js editor - using brute force approach to find all possible editors
+    const possibleEditors = [
+      document.querySelector('.DraftEditor-editorContainer [contenteditable="true"]'),
+      document.querySelector('.DraftEditor-root [contenteditable="true"]'),
+      document.querySelector('[data-testid="tweetTextarea_0"]'),
+      document.querySelector('[data-testid="tweetTextarea_1"]'),
+      document.querySelector('#layers [contenteditable="true"]'),
+      document.querySelector('[role="textbox"][contenteditable="true"]'),
+      document.querySelector('[aria-label*="Tweet text"]'),
+      document.querySelector('[aria-label*="Post text"]'),
+      ...Array.from(document.querySelectorAll('[contenteditable="true"]')),
+      ...Array.from(document.querySelectorAll('[role="textbox"]'))
+    ].filter(Boolean);
+    
+    console.log('📝 setTextInTwitterEditor - Found', possibleEditors.length, 'possible editors');
+    
+    if (possibleEditors.length === 0) {
+      throw new Error('Could not find any suitable text editor element');
+    }
+    
+    // Get the most likely editor (visible in the current layer)
+    const editableElement = possibleEditors[0];
+    console.log('📝 setTextInTwitterEditor - Selected editor:', {
+      tagName: editableElement.tagName,
+      className: editableElement.className,
+      id: editableElement.id,
+      role: editableElement.getAttribute('role')
+    });
+    
+    // APPROACH 1: Try using the Selection API to set text
+    console.log('📝 setTextInTwitterEditor - Trying Selection API approach');
+    try {
+      // Focus and clear selection
+      editableElement.focus();
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Create a selection in the editor
+      const selection = window.getSelection();
+      selection.selectAllChildren(editableElement);
+      
+      // Insert text with proper handling of newlines
+      if (text.includes('\n')) {
+        // For multi-line text, use insertHTML to preserve line breaks
+        const htmlText = text.replace(/\n/g, '<br>');
+        document.execCommand('insertHTML', false, htmlText);
+      } else {
+        // For single-line text, use the simpler insertText
+        document.execCommand('insertText', false, text);
+      }
+      
+      // Dispatch all possible events that Twitter might be listening for
+      ['input', 'change', 'keydown', 'keyup', 'blur', 'focus'].forEach(eventType => {
+        editableElement.dispatchEvent(new Event(eventType, { bubbles: true }));
+      });
+      
+      // Dispatch a more specific input event
+      editableElement.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertText',
+        data: text
+      }));
+      
+      console.log('📝 setTextInTwitterEditor - Selection API approach completed');
+    } catch (selectionError) {
+      console.error('❌ setTextInTwitterEditor - Selection API approach failed:', selectionError);
+    }
+    
+    // APPROACH 2: Direct property manipulation 
+    if (!editableElement.textContent.includes(text.substring(0, 5))) {
+      console.log('📝 setTextInTwitterEditor - Trying direct property manipulation');
+      try {
+        editableElement.textContent = text;
+        editableElement.innerHTML = text.replace(/\n/g, '<br>');
+        
+        ['input', 'change', 'keydown', 'keyup'].forEach(eventType => {
+          editableElement.dispatchEvent(new Event(eventType, { bubbles: true }));
+        });
+        
+        console.log('📝 setTextInTwitterEditor - Direct property manipulation completed');
+      } catch (propertyError) {
+        console.error('❌ setTextInTwitterEditor - Direct property manipulation failed:', propertyError);
+      }
+    }
+    
+    // APPROACH 3: Use clipboard
+    if (!editableElement.textContent.includes(text.substring(0, 5))) {
+      console.log('📝 setTextInTwitterEditor - Trying clipboard approach');
+      try {
+        // Save current clipboard
+        const originalClipboard = await navigator.clipboard.readText().catch(() => null);
+        
+        // Set our text to clipboard
+        await navigator.clipboard.writeText(text);
+        
+        // Focus and select all text
+        editableElement.focus();
+        document.execCommand('selectAll', false, null);
+        
+        // Paste
+        document.execCommand('paste', false);
+        
+        // Simulate paste event
+        const clipboardData = new DataTransfer();
+        clipboardData.setData('text/plain', text);
+        
+        editableElement.dispatchEvent(new ClipboardEvent('paste', {
+          bubbles: true,
+          clipboardData,
+          cancelable: true
+        }));
+        
+        // Restore original clipboard if we had one
+        if (originalClipboard) {
+          setTimeout(() => {
+            navigator.clipboard.writeText(originalClipboard).catch(() => {});
+          }, 500);
+        }
+        
+        console.log('📝 setTextInTwitterEditor - Clipboard approach completed');
+      } catch (clipboardError) {
+        console.error('❌ setTextInTwitterEditor - Clipboard approach failed:', clipboardError);
+      }
+    }
+    
+    // HACK: Force enable the Reply button after a short delay
+    setTimeout(() => {
+      console.log('📝 setTextInTwitterEditor - Checking tweet button status');
+      const tweetButton = document.querySelector('[data-testid="tweetButton"]');
+      
+      if (tweetButton && tweetButton.getAttribute('aria-disabled') === 'true') {
+        console.log('📝 setTextInTwitterEditor - Tweet button is disabled, applying force enable hack');
+        
+        // Remove disabled attributes
+        tweetButton.removeAttribute('aria-disabled');
+        tweetButton.removeAttribute('disabled');
+        
+        // Make sure the button is styled as enabled
+        tweetButton.style.opacity = '1';
+        tweetButton.style.cursor = 'pointer';
+        
+        // Add our own click handler that will bypass Twitter's disabled state
+        if (!tweetButton.getAttribute('data-gemini-enhanced')) {
+          tweetButton.setAttribute('data-gemini-enhanced', 'true');
+          
+          // Create a clone of the button to replace the original
+          // This removes any event listeners that might be preventing clicks
+          const newButton = tweetButton.cloneNode(true);
+          tweetButton.parentNode.replaceChild(newButton, tweetButton);
+          
+          // Make absolutely sure our text is in the editor
+          if (editableElement && !editableElement.textContent.includes(text.substring(0, 5))) {
+            editableElement.textContent = text;
+            editableElement.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          
+          console.log('📝 setTextInTwitterEditor - Tweet button has been force-enabled');
+        }
+      } else if (tweetButton) {
+        console.log('📝 setTextInTwitterEditor - Tweet button already enabled');
+      } else {
+        console.log('📝 setTextInTwitterEditor - Tweet button not found');
+      }
+    }, 1000);
+    
+    // Final check - if text is still not in the editor, notify the user
+    setTimeout(() => {
+      if (editableElement && !editableElement.textContent.includes(text.substring(0, 5))) {
+        console.warn('⚠️ setTextInTwitterEditor - Text insertion may have failed, copying to clipboard');
+        navigator.clipboard.writeText(text);
+        alert('Text copied to clipboard. Please paste manually with Ctrl/Cmd+V');
+      }
+    }, 1500);
+    
+    return true;
+  } catch (error) {
+    console.error('❌ setTextInTwitterEditor - Fatal error:', error);
+    // Final fallback - copy to clipboard
+    await navigator.clipboard.writeText(text);
+    alert('Text copied to clipboard. Please paste manually (Ctrl/Cmd+V)');
+    return false;
+  }
 }
