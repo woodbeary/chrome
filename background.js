@@ -3,9 +3,10 @@ import { createProductPrompt } from './product_prompt.js';
 // Track if the extension is activated (authenticated)
 let isExtensionActivated = false;
 
-// Forcibly set to false on initialization to ensure security
-chrome.storage.sync.set({ extensionAuthenticated: false }, () => {
-  console.log('📊 Extension activation reset to false on initialization for security');
+// Check if extension is already authenticated instead of forcibly resetting
+chrome.storage.sync.get(['extensionAuthenticated'], (result) => {
+  isExtensionActivated = result.extensionAuthenticated === true;
+  console.log('📊 Extension activation status on initialization:', isExtensionActivated);
   
   // Notify only tabs that match our content script permissions
   // This prevents errors when sending messages to tabs where our content script isn't loaded
@@ -22,7 +23,7 @@ chrome.storage.sync.set({ extensionAuthenticated: false }, () => {
       // Use a more reliable way to send messages that doesn't throw uncaught errors
       chrome.tabs.sendMessage(tab.id, {
         type: 'ACTIVATION_STATUS_CHANGED',
-        activated: false
+        activated: isExtensionActivated
       }, response => {
         // Check for errors but don't throw if there's no response
         // This will silently fail for tabs without our content script

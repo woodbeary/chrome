@@ -252,6 +252,36 @@ document.getElementById('clearKey').addEventListener('click', () => {
   });
 });
 
+// Logout button handler
+document.getElementById('logoutButton').addEventListener('click', () => {
+  // Show confirmation dialog
+  if (confirm('Are you sure you want to log out? You will need to authenticate again to use the extension.')) {
+    // Clear authentication state
+    chrome.storage.sync.set({ extensionAuthenticated: false }, () => {
+      console.log('User manually logged out, auth state cleared');
+      
+      // Notify background script that extension is deactivated
+      chrome.runtime.sendMessage({ 
+        type: 'ACTIVATE_EXTENSION', 
+        activated: false 
+      });
+      
+      // Clear API key for complete logout
+      chrome.storage.sync.remove('geminiApiKey', () => {
+        console.log('API key removed during logout');
+        
+        // Show success message
+        const status = document.getElementById('passwordStatus');
+        status.textContent = 'Logged out successfully. Please log in again to use the extension.';
+        status.className = 'status success';
+        
+        // Update UI to show login form
+        document.body.classList.remove('authenticated');
+      });
+    });
+  }
+});
+
 // Check for existing API key on popup open
 window.addEventListener('load', () => {
   // First check authentication status

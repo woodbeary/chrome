@@ -5,7 +5,9 @@
 		},
 		{
 			"path": "../chromefront"
+		},
+		{
+			"path": "../chromeios"
 		}
-	],
-	"settings": {}
+	]
 }
